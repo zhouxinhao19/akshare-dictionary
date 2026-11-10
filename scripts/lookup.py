@@ -6,6 +6,7 @@ Examples:
   python lookup.py --name stock_zh_a_hist
   python lookup.py --status success 期货 库存
   python lookup.py --json 宏观 CPI
+  python lookup.py --live 新接口名    # catalog 没有时直接查已安装 akshare 的接口表
 """
 
 from __future__ import annotations
@@ -23,27 +24,35 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 CATALOG = Path(__file__).resolve().parent.parent / "data" / "catalog.json"
-STATUS_MARK = {"success": "OK", "error": "ERR", "timeout": "TO", "unknown": "?"}
+STATUS_MARK = {"success": "OK", "error": "ERR", "timeout": "TO", "unknown": "?",
+               "untested": "--", "live": "LV"}
 CAT_LABELS = {
-    "stock": "股票 a股 沪深 行情",
-    "stock_feature": "股票 特征",
-    "stock_fundamental": "股票 基本面 财务",
-    "futures": "期货 商品 合约",
-    "futures_derivative": "衍生品",
+    "stock": "股票 a股 沪深 行情 资金 财务 基本面",
+    "futures": "期货 商品 合约 持仓 库存",
     "option": "期权",
     "fund": "基金 etf 净值",
-    "index": "指数 股指",
+    "index": "指数 股指 行业指数",
     "bond": "债券 国债 可转债",
     "macro": "宏观 经济",
     "interest_rate": "利率 国债收益率",
     "fx": "外汇 汇率",
     "currency": "货币 汇率",
     "spot": "现货",
-    "energy": "能源",
-    "reits": "reits 房地产信托",
+    "energy": "能源 碳",
     "qdii": "qdii",
-    "cal": "日历 交易日",
+    "calendar": "日历 交易日 工具",
+    "alternative": "替代 空气 电影 票房 汽车 迁移",
+    "research": "研究 因子 波动率 EPU FF",
+    "indicator": "指标 已实现波动率",
+    "crypto": "加密 比特币",
+    "bank": "银行 处罚",
+    "migration": "人口迁移",
+    "high_freq": "高频",
+    "nlp": "百科 问答",
+    "reits": "reits 房地产信托",
     "others": "其他",
     "tool": "工具",
 }
@@ -64,7 +73,16 @@ CAT_ALIAS = {
     "汇率": "fx",
     "现货": "spot",
     "能源": "energy",
-    "日历": "cal",
+    "日历": "calendar",
+    "交易日": "calendar",
+    "空气": "alternative",
+    "电影": "alternative",
+    "票房": "alternative",
+    "加密": "crypto",
+    "比特币": "crypto",
+    "迁移": "migration",
+    "研究": "research",
+    "波动率": "indicator",
 }
 SYNONYMS = {
     "日线": ["日线", "日频", "日频率"],
@@ -92,6 +110,43 @@ def load_catalog() -> dict[str, Any]:
     if not CATALOG.exists():
         sys.exit(f"catalog not found: {CATALOG}")
     return json.loads(CATALOG.read_text(encoding="utf-8"))
+
+
+def drift_notice() -> str:
+    """catalog 版本 vs 当前环境已安装 akshare 版本；不一致时返回提醒文字。"""
+    try:
+        from ak_registry import installed_version
+        inst = installed_version()
+    except Exception:
+        return ""
+    if not inst:
+        return ""
+    try:
+        cat_ver = str(load_catalog().get("meta", {}).get("akshare_version", "?"))
+    except SystemExit:
+        return ""
+    if cat_ver == inst:
+        return ""
+    return (f"⚠️ 版本漂移：catalog 基于 akshare {cat_ver}，本环境已安装 {inst}。"
+            f"接口名/参数可能已变（旧名调用可能直接 ImportError）。"
+            f"查询加 --live 可直接读已安装版本的接口表；"
+            f"维护者请跑 bash scripts/refresh.sh 同步 catalog。")
+
+
+def live_records() -> list[dict[str, Any]] | None:
+    """读已安装 akshare 的内置接口表（--live 回退）；不可用返回 None。"""
+    try:
+        from ak_registry import load_registry
+        records, meta = load_registry(None)
+    except (SystemExit, Exception):
+        return None
+    out = []
+    for r in records:
+        item = dict(r)
+        item["status"] = "live"
+        item["live_version"] = meta.get("akshare_version")
+        out.append(item)
+    return out
 
 
 def _fold(text: str) -> str:
@@ -240,7 +295,7 @@ def main() -> None:
     parser.add_argument("--category", help="filter by category, e.g. stock/futures/macro")
     parser.add_argument(
         "--status",
-        choices=["success", "error", "timeout", "unknown"],
+        choices=["success", "error", "timeout", "unknown", "untested"],
         help="filter by last test status",
     )
     parser.add_argument("--limit", type=int, default=12, help="max brief hits (default 12)")
@@ -250,13 +305,28 @@ def main() -> None:
         action="store_true",
         help="print full records (auto if --name unique or 1 hit)",
     )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="直接检索当前环境已安装 akshare 的内置接口表（catalog 落后/接口改名时的自愈路径）",
+    )
     args = parser.parse_args()
 
     if not args.keywords and not args.name and not args.category:
         parser.error("need keywords, --name, or --category")
 
-    data = load_catalog()
-    items: list[dict[str, Any]] = data.get("interfaces") or []
+    if args.live:
+        items = live_records() or []
+        if not items:
+            sys.exit("--live 需要当前环境安装 akshare>=1.20（自带内置接口表）")
+        data = {"meta": {"akshare_version": items[0].get("live_version", "?"),
+                         "total": len(items), "generated_at": "live"}}
+    else:
+        data = load_catalog()
+        notice = drift_notice()
+        if notice:
+            print(notice, file=sys.stderr)
+        items: list[dict[str, Any]] = data.get("interfaces") or []
     if args.category:
         raw = _fold(args.category)
         cat = CAT_ALIAS.get(raw, raw)
@@ -283,6 +353,9 @@ def main() -> None:
     if not ranked:
         print("NO_MATCH")
         print("Try fewer tokens, drop --status, or search category aliases (stock/futures/fund/macro/index/option/bond/fx).")
+        if not args.live:
+            print("catalog 里确实没有时，可能是上游新增/改名：改用 --live 直接查已安装版本，"
+                  "或跑 bash scripts/refresh.sh 同步 catalog。")
         sys.exit(1)
 
     hits = [it for _, it in ranked]

@@ -33,31 +33,42 @@ if sys.platform == "win32":
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lookup import load_catalog  # noqa: E402
 
-CATALOG_MARK = {"success": "OK", "error": "ERR", "timeout": "TO", "unknown": "?"}
+CATALOG_MARK = {"success": "OK", "error": "ERR", "timeout": "TO", "unknown": "?",
+                "untested": "--"}
+MAX_COLUMNS = 200  # 实测列名最多记录这么多，防止超宽表把 catalog 撑爆
+
+
+def build_call(item: dict[str, Any]) -> str:
+    """按 catalog 固化的实参拼出调用串（位置参与关键字参都支持）。"""
+    name = str(item.get("name"))
+    args = item.get("args_used") or []
+    kwargs = item.get("params_used") or {}
+    parts = [repr(a) for a in args]
+    parts += [f"{k}={v!r}" for k, v in kwargs.items()]
+    return f"ak.{name}({', '.join(parts)})"
 
 
 def _build_code(item: dict[str, Any]) -> str:
-    name = str(item.get("name"))
-    used = item.get("params_used") or {}
-    call = f"ak.{name}(**{used!r})" if used else f"ak.{name}()"
     return (
         "import akshare as ak\n"
-        f"_df = {call}\n"
+        f"_df = {build_call(item)}\n"
         "_rows = len(_df)\n"
         "_ncols = len(_df.columns)\n"
+        "_columns = [str(c) for c in _df.columns][:MAX_COLUMNS]\n"
     )
 
 
 def _child(code: str, q: Any) -> None:
-    g: dict[str, Any] = {"__name__": "__main__"}
+    g: dict[str, Any] = {"__name__": "__main__", "MAX_COLUMNS": MAX_COLUMNS}
     t0 = time.perf_counter()
     try:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             exec(code, g)  # noqa: S102 - 执行的是 catalog 固化的调用样例
         q.put({"ok": True, "rows": g.get("_rows"), "ncols": g.get("_ncols"),
+               "columns": g.get("_columns") or [],
                "seconds": round(time.perf_counter() - t0, 2), "error": ""})
     except BaseException as e:  # 网络失败要以结果上报，不能把主进程拖垮
-        q.put({"ok": False, "rows": None, "ncols": None,
+        q.put({"ok": False, "rows": None, "ncols": None, "columns": [],
                "seconds": round(time.perf_counter() - t0, 2),
                "error": f"{type(e).__name__}: {e}"})
 
@@ -74,12 +85,14 @@ def check_one(item: dict[str, Any], timeout: float) -> dict[str, Any]:
         p.join(3)
         return {"name": item.get("name"), "ok": False, "timeout": True,
                 "seconds": round(time.perf_counter() - t0, 2), "rows": None, "ncols": None,
+                "columns": [],
                 "error": f"超过 {timeout:g}s 未返回（含 akshare 导入），已终止"}
     try:
         res = q.get(timeout=5)
     except Exception:
         return {"name": item.get("name"), "ok": False, "timeout": False,
                 "seconds": round(time.perf_counter() - t0, 2), "rows": None, "ncols": None,
+                "columns": [],
                 "error": "子进程无结果（可能在导入阶段异常退出）"}
     res["name"] = item.get("name")
     res["timeout"] = False
