@@ -1,0 +1,38 @@
+name: AKShare live smoke test
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install latest AKShare
+        run: python -m pip install --upgrade akshare
+
+      - name: Run live smoke test
+        run: |
+          set -o pipefail
+          python scripts/smoke.py --timeout 45 --json | tee akshare-smoke.json
+
+      - name: Upload smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: akshare-smoke-report
+          path: akshare-smoke.json
+          if-no-files-found: ignore

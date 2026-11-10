@@ -1,6 +1,6 @@
 # akshare-dictionary · AKShare 数据字典 Skill
 
-一个可导入 AI 编程工具（ZCode / Cursor 等支持 Agent Skills 的工具）的 **Skill**，内置 **1090 个 AKShare 接口的实测目录**。让大模型写 AKShare 取数代码前先查目录，**杜绝编造 `ak.*` 函数名、参数和列名**。
+一个可导入 AI 编程工具（ZCode / Cursor 等支持 Agent Skills 的工具）的 **Skill**，内置 **1090 个 AKShare 接口的版本化实测目录**，并提供候选接口的现场复测与定时在线烟测。让大模型写 AKShare 取数代码前先查目录，**避免编造 `ak.*` 函数名、参数和列名**。
 
 > LLM 写 AKShare 代码最常见的失败不是不会写，而是**自信地编造**：函数名不存在、参数顺序错、列名和文档对不上。本 Skill 用一份实测过的接口目录 + 检索/复测脚本把这一步变成"先查再写"。
 
@@ -17,7 +17,7 @@
 | `status` | 实测结果：success / error / timeout（快照，可用 `check.sh` 复测） |
 | `example` | 可运行的调用样例 |
 
-快照信息：AKShare **1.18.94**，2026-08-26 实测，1090 接口（成功 776 / 失败 200 / 超时 114），覆盖 stock / futures / fund / option / bond / index / macro / fx / spot 等类目。
+快照信息：AKShare **1.18.94**，2026-08-26 实测，1090 接口（成功 776 / 失败 200 / 超时 114），覆盖 stock / futures / fund / option / bond / index / macro / fx / spot 等类目。该目录不是实时数据服务；仓库 GitHub Actions 每 6 小时复测一组代表性接口，结果保存在 Actions artifact 中。
 
 ## 安装
 
@@ -52,6 +52,12 @@ bash scripts/lookup.sh --status success 宏观 CPI
 bash scripts/check.sh stock_zh_a_hist stock_zh_a_daily
 ```
 
+复测代表性接口组（需要安装 akshare）：
+
+```bash
+python scripts/smoke.py
+```
+
 参数填写约定（证券代码格式、日期格式、复权、期货连续合约等跨接口的坑）见 [conventions.md](conventions.md)。
 
 ## 重建目录
@@ -66,6 +72,7 @@ bash scripts/build_catalog.sh --src <字典仓库>/output/akshare_dictionary.jso
 
 - 数据来自东方财富、新浪财经等公开接口，仅供学习研究，不构成投资建议；请遵守数据源的 使用条款，注意请求频率。
 - `status` 是构建当天（`meta.generated_at`）的快照，不代表永久可用性；写代码前可用 `check.sh` 复测。
+- 定时烟测只能发现代表性数据源故障，不能保证所有接口、字段、延迟或交易级实时性；调用方仍应校验返回时间戳和数据形状。
 
 ## License
 
