@@ -8,10 +8,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: akshare-smoke
+  cancel-in-progress: false
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -24,10 +28,17 @@ jobs:
       - name: Install latest AKShare
         run: python -m pip install --upgrade akshare
 
+      # 每组给多个候选，任一成功即视为该类数据源可用；整组失败才重试首选。
+      # 单接口耗时差异大（index_zh_a_hist 冷启动要分页拉量表），超时按接口在脚本内单独放宽。
       - name: Run live smoke test
         run: |
           set -o pipefail
-          python scripts/smoke.py --timeout 45 --json | tee akshare-smoke.json
+          python scripts/smoke.py \
+            --timeout 60 \
+            --retries 1 \
+            --json \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            | tee akshare-smoke.json
 
       - name: Upload smoke report
         if: always()

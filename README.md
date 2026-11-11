@@ -55,8 +55,17 @@ bash scripts/check.sh stock_zh_a_hist stock_zh_a_daily
 复测代表性接口组（需要安装 akshare）：
 
 ```bash
-python scripts/smoke.py
+python scripts/smoke.py                  # 分 6 组，每组多个候选，任一成功即该组可用
+python scripts/smoke.py --json           # 机读报告
+python scripts/smoke.py --timeout 60 --retries 1
 ```
+
+烟测的设计取舍：
+- **只验证连通性**：每组候选都改用最近 30 天的窄日期区间，不照抄 catalog 里为记录列名而用的宽区间（否则单接口翻全历史，容易被误判超时）。
+- **组内任一候选成功即通过**：东财、新浪、腾讯互为主备，单个数据源抖动不该让整组报红。
+- **每组的全部候选都会探一遍**：报告里能直接看出是哪个数据源挂了。
+- **整组全挂才重试首选**：一次重试用来区分「真故障」和「网络抖动」。
+- `index_zh_a_hist` 每次调用前要分页拉东方财富指数量表（约 17 页、页间 sleep），冷启动固定 30s 左右，脚本内对它有单独的超时放宽。
 
 参数填写约定（证券代码格式、日期格式、复权、期货连续合约等跨接口的坑）见 [conventions.md](conventions.md)。
 
@@ -72,7 +81,7 @@ bash scripts/build_catalog.sh --src <字典仓库>/output/akshare_dictionary.jso
 
 - 数据来自东方财富、新浪财经等公开接口，仅供学习研究，不构成投资建议；请遵守数据源的 使用条款，注意请求频率。
 - `status` 是构建当天（`meta.generated_at`）的快照，不代表永久可用性；写代码前可用 `check.sh` 复测。
-- 定时烟测只能发现代表性数据源故障，不能保证所有接口、字段、延迟或交易级实时性；调用方仍应校验返回时间戳和数据形状。
+- 定时烟测只能发现代表性数据源故障，不能保证所有接口、字段、延迟或交易级实时性；调用方仍应校验返回时间戳和数据形状。烟测结论写在每次 Actions 运行的 Job Summary 里，JSON 报告在 artifact `akshare-smoke-report`。
 
 ## License
 
