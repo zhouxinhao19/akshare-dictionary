@@ -1,7 +1,7 @@
 ---
 name: akshare-dictionary
 description: >-
-  Looks up AKShare financial-data APIs from a tested catalog of 1090 interfaces (stock, futures, fund, macro, option, bond, index, FX).
+  Looks up AKShare financial-data APIs from a tested catalog of 1072 interfaces (stock, futures, fund, macro, option, bond, index, FX).
   Use when the user asks to 拉数据, 取数, akshare, AKShare, 数据接口, 数据字典, 行情, 基本面, 宏观, ETF, 期货, 期权, 债券, or needs the correct function name, parameters, or output columns.
 ---
 
@@ -9,7 +9,7 @@ description: >-
 
 禁止凭记忆编造 `ak.*` 函数名、参数或列名。先检索本 Skill 的 catalog，再写调用代码。
 
-Catalog 基于 AKShare **1.18.94**、2026-08-26 实测（1090 接口：成功 776 / 失败 200 / 超时 114）。`status` 是快照，不是实时可用性保证；上游版本、接口参数和数据源网络都可能变化。东财类接口常 `ConnectionError`，文档参数仍可试。写调用前可用 `check.sh` 对候选接口现场复测；仓库还会每 6 小时对代表性接口运行一次在线烟测。
+Catalog 基于 AKShare **1.20.37**、2026-11-10 实测（1072 接口：成功 768 / 失败 193 / 超时 111）。`status` 是快照，不是实时可用性保证；上游版本、接口参数和数据源网络都可能变化。东财类接口常 `ConnectionError`，文档参数仍可试。写调用前可用 `check.sh` 对候选接口现场复测；仓库还会每 6 小时对代表性接口运行一次在线烟测。
 
 ## 工作流
 
@@ -62,7 +62,7 @@ bash scripts/check.sh stock_zh_a_hist stock_zh_a_daily
 
 ## 高频需求（仍须 `--name` 核对参数）
 
-表中「首选/备选」的可用性备注是 2026-08-26 快照，东财类尤其会变；临用前可 `check.sh 首选 备选` 复测。
+表中「首选/备选」的可用性备注是 2026-11-10 快照，东财类尤其会变；临用前可 `check.sh 首选 备选` 复测。
 
 | 需求 | 首选 | 备注 |
 |---|---|---|
@@ -97,8 +97,8 @@ df = ak.stock_zh_a_hist(
 - 用 catalog 的 `example` 和 `params_used` 当起点，按用户日期/代码改。
 - **列名**：有 `columns` 用实测列；`columns_match_doc=false` 时不要用文档列名。
 - 失败接口也可按文档参数调用，并注明实测失败原因。
-- 需要最新接口列表时，让用户在字典仓库重跑 `build_dictionary.py`，再执行 `scripts/build_catalog.sh`。
+- 需要最新接口列表时，用已安装的 AKShare 运行 `python scripts/build_catalog.py`（或 `--src` 指向旧字典仓库的 `akshare_dictionary.json`），再用 `python scripts/drift.py` 检查漂移，并用 `python scripts/retest.py --status untested` 复测未测或参数已变的接口。
 
 ## 时效性边界
 
-本 Skill 提供的是“接口目录 + 调用前现场复测”，不能保证任一数据源持续在线、返回完整数据或满足交易级实时性。定时烟测只验证代表性接口每组至少有一个候选成功，不会把网络偶发成功写回 catalog，也不会替代调用方对返回时间戳、行数和字段的校验。任何候选失败都只作为信号记录在报告里，只有整组候选全部失败才判定失败。需要最新接口列表或参数时，应重新生成上游字典后再构建 catalog。
+本 Skill 提供的是“接口目录 + 调用前现场复测”，不能保证任一数据源持续在线、返回完整数据或满足交易级实时性。定时烟测只验证代表性接口每组至少有一个候选成功，不会把网络偶发成功写回 catalog，也不会替代调用方对返回时间戳、行数和字段的校验。任何候选失败都只作为信号记录在报告里，只有整组候选全部失败才判定失败。需要最新接口列表或参数时，应从已安装的 AKShare 重建 catalog（或先更新上游字典再 `--src` 导入），然后做漂移检查与必要的复测。

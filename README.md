@@ -1,12 +1,12 @@
 # akshare-dictionary · AKShare 数据字典 Skill
 
-一个可导入 AI 编程工具（ZCode / Cursor 等支持 Agent Skills 的工具）的 **Skill**，内置 **1090 个 AKShare 接口的版本化实测目录**，并提供候选接口的现场复测与定时在线烟测。让大模型写 AKShare 取数代码前先查目录，**避免编造 `ak.*` 函数名、参数和列名**。
+一个可导入 AI 编程工具（ZCode / Cursor 等支持 Agent Skills 的工具）的 **Skill**，内置 **1072 个 AKShare 接口的版本化实测目录**，并提供候选接口的现场复测与定时在线烟测。让大模型写 AKShare 取数代码前先查目录，**避免编造 `ak.*` 函数名、参数和列名**。
 
 > LLM 写 AKShare 代码最常见的失败不是不会写，而是**自信地编造**：函数名不存在、参数顺序错、列名和文档对不上。本 Skill 用一份实测过的接口目录 + 检索/复测脚本把这一步变成"先查再写"。
 
 ## 目录里有什么
 
-`data/catalog.json`（约 1.3MB）由全量接口实测生成，每个接口记录：
+`data/catalog.json`（约 1.4MB）由全量接口实测生成，每个接口记录：
 
 | 字段 | 内容 |
 |---|---|
@@ -17,7 +17,7 @@
 | `status` | 实测结果：success / error / timeout（快照，可用 `check.sh` 复测） |
 | `example` | 可运行的调用样例 |
 
-快照信息：AKShare **1.18.94**，2026-08-26 实测，1090 接口（成功 776 / 失败 200 / 超时 114），覆盖 stock / futures / fund / option / bond / index / macro / fx / spot 等类目。该目录不是实时数据服务；仓库 GitHub Actions 每 6 小时复测一组代表性接口，结果保存在 Actions artifact 中。
+快照信息：AKShare **1.20.37**，2026-11-10 实测，1072 接口（成功 768 / 失败 193 / 超时 111），覆盖 stock / futures / fund / option / bond / index / macro / fx / spot 等类目。该目录不是实时数据服务；仓库 GitHub Actions 每 6 小时复测一组代表性接口，结果保存在 Actions artifact 中。
 
 ## 安装
 
@@ -71,11 +71,30 @@ python scripts/smoke.py --timeout 60 --retries 1
 
 ## 重建目录
 
-目录来自你的"字典仓库"（对全量接口跑一遍测试生成的 `akshare_dictionary.json`）：
+推荐从已安装的 AKShare 1.20+ 内置接口表重建。实测状态按参数指纹继承：接口名和测试参数没变时沿用上一版 status/columns，只有新增或参数变更的接口会标成 untested。
 
 ```bash
-bash scripts/build_catalog.sh --src <字典仓库>/output/akshare_dictionary.json
+python scripts/build_catalog.py
+# 或
+bash scripts/build_catalog.sh
 ```
+
+仍可使用旧字典仓库生成的 `akshare_dictionary.json`：
+
+```bash
+python scripts/build_catalog.py --src <字典仓库>/output/akshare_dictionary.json
+```
+
+可选标志：`--keep-status` 无条件继承全部实测状态；`--no-inherit` 全部标 untested。
+
+重建后做离线漂移检查，再对需要更新的接口现场复测：
+
+```bash
+python scripts/drift.py
+python scripts/retest.py --status untested
+```
+
+单个接口的现场复测仍用 `bash scripts/check.sh <接口名>`。
 
 ## 声明
 

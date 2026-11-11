@@ -61,10 +61,20 @@
 
 ## 更新 catalog
 
-字典仓库生成新的 `output/akshare_dictionary.json` 后：
+推荐从已安装的 AKShare 1.20+ 内置接口表重建：
 
 ```bash
-bash scripts/build_catalog.sh --src <字典仓库>/output/akshare_dictionary.json
+python scripts/build_catalog.py
+```
+
+仍可使用旧字典仓库生成的 `akshare_dictionary.json`：
+
+```bash
+python scripts/build_catalog.py --src <字典仓库>/output/akshare_dictionary.json
 ```
 
 `--src` 必须指向字典仓库的 `akshare_dictionary.json`（原脚本里的 `~/Desktop/akshare数据字典/...` 只是本机的历史默认值，换机器后不可用）。
+
+可选标志：`--keep-status` 无条件继承全部实测状态；`--no-inherit` 全部标 untested。
+
+重建后可用 `python scripts/drift.py` 做离线漂移检查，再用 `python scripts/retest.py --status untested` 复测未测或参数已变的接口。
