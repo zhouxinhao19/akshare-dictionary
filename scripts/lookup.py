@@ -113,7 +113,11 @@ def load_catalog() -> dict[str, Any]:
 
 
 def drift_notice() -> str:
-    """catalog 版本 vs 当前环境已安装 akshare 版本；不一致时返回提醒文字。"""
+    """catalog 版本 vs 当前环境已安装 akshare 版本；不一致时返回提醒文字。
+
+    提醒要指对方向：catalog 比本机新时不能用"接口改过名"去解释本机的报错，
+    本机比 catalog 新时才是"文档里的名字可能已经过时"。
+    """
     try:
         from ak_registry import installed_version
         inst = installed_version()
@@ -127,10 +131,85 @@ def drift_notice() -> str:
         return ""
     if cat_ver == inst:
         return ""
-    return (f"⚠️ 版本漂移：catalog 基于 akshare {cat_ver}，本环境已安装 {inst}。"
-            f"接口名/参数可能已变（旧名调用可能直接 ImportError）。"
-            f"查询加 --live 可直接读已安装版本的接口表；"
-            f"维护者请跑 bash scripts/refresh.sh 同步 catalog。")
+    if _newer_than(inst, cat_ver):
+        tail = ("catalog 里改过名的接口可用 --name <旧名> 反查新名；"
+                "维护者请跑 bash scripts/build_catalog.sh 同步 catalog。")
+    else:
+        tail = ("本机版本较旧，catalog 里的新名字在本机可能还不存在（调用会 AttributeError）；"
+                "升级 akshare，或用 --live 查本机版本实际提供的接口。")
+    return (f"⚠️ 版本漂移：catalog 基于 akshare {cat_ver}，本环境已安装 {inst}。{tail}")
+
+
+def _newer_than(candidate: str, baseline: str) -> bool:
+    """宽松比较版本号：只取数字段，解析不了就当作不更新。"""
+    def parts(text: str) -> tuple[int, ...]:
+        out = []
+        for chunk in str(text).split("."):
+            digits = "".join(ch for ch in chunk if ch.isdigit())
+            out.append(int(digits) if digits else 0)
+        return tuple(out)
+    try:
+        return parts(candidate) > parts(baseline)
+    except (TypeError, ValueError):
+        return False
+
+
+_RENAME_PAIRS: dict[str, str] | None = None
+_RENAME_REMOVED: dict[str, str] | None = None
+
+
+def _catalog_rename_meta() -> dict[str, dict]:
+    """catalog 构建时固化的改名/移除对照（meta.renames）；读一次就缓存。"""
+    global _RENAME_PAIRS, _RENAME_REMOVED
+    if _RENAME_PAIRS is not None:
+        return {"renamed": _RENAME_PAIRS, "removed": _RENAME_REMOVED or {}}
+    pairs: dict[str, str] = {}
+    removed: dict[str, str] = {}
+    try:
+        got = (load_catalog().get("meta") or {}).get("renames") or {}
+        pairs = {str(k): str(v) for k, v in (got.get("renamed") or {}).items()}
+        removed = {str(k): str(v) for k, v in (got.get("removed") or {}).items()}
+    except SystemExit:
+        pass
+    _RENAME_PAIRS, _RENAME_REMOVED = pairs, removed
+    return {"renamed": pairs, "removed": removed}
+
+
+def catalog_renames() -> dict[str, str]:
+    """旧名 → 当前名。
+
+    优先用 catalog 里固化的对照表——它和 catalog 里的接口名是同一版本，
+    不会因为本机装的是老版 akshare（没有 data/renames.json）就失效。
+    catalog 没带这份数据（旧版 catalog）时才退回读已安装的 akshare。
+    """
+    pairs = _catalog_rename_meta()["renamed"]
+    if pairs:
+        return pairs
+    try:
+        from ak_registry import flatten_renames, load_renames
+        return flatten_renames(load_renames()["renamed"])
+    except Exception:
+        return {}
+
+
+def catalog_removed() -> dict[str, str]:
+    """已被上游移除的旧名 → 移除它的 akshare 版本。"""
+    removed = _catalog_rename_meta()["removed"]
+    if removed:
+        return removed
+    try:
+        from ak_registry import load_renames
+        return dict(load_renames()["removed"])
+    except Exception:
+        return {}
+
+
+def rename_lookup(name: str) -> tuple[str | None, list[str]]:
+    """按旧名反查新名；返回 (新名, 指向该名的旧名列表)。"""
+    pairs = catalog_renames()
+    new_name = pairs.get(name)
+    olds = [old for old, new in pairs.items() if new == name]
+    return new_name, olds
 
 
 def live_records() -> list[dict[str, Any]] | None:
@@ -273,6 +352,16 @@ def print_detail(item: dict[str, Any]) -> None:
         print(f"limit: {item['limit']}")
     if item.get("url"):
         print(f"url: {item['url']}")
+    name = str(item.get("name") or "")
+    if name and item.get("status") != "live":
+        old_name, olds = rename_lookup(name)
+        if old_name:
+            print(f"renamed_to: {old_name}  （旧名已失效，请改用新名）")
+        if olds:
+            print(f"旧名(旧代码可能仍在用): {', '.join(sorted(olds))}")
+    if item.get("status_inherited_from"):
+        print(f"status_inherited_from: {item['status_inherited_from']}"
+              f"  （实测状态由改名前的接口继承）")
     print(f"params:\n    {format_params(item)}")
     used = item.get("params_used") or {}
     if used:
@@ -350,12 +439,24 @@ def main() -> None:
             ranked.append((s, item))
     ranked.sort(key=lambda x: (-x[0], x[1].get("name") or ""))
 
+    if not ranked and args.name and not args.live:
+        # 用旧名查不到时，先查改名表：改过名的接口直接指到新名，别让人以为接口没了
+        new_name, _ = rename_lookup(args.name)
+        if new_name:
+            print(f"{args.name} 已更名为 {new_name}（见 catalog.meta.renames）")
+            for item in items:
+                if item.get("name") == new_name:
+                    print_detail(item)
+                    return
+            print(f"catalog 里还没有 {new_name}；跑 bash scripts/build_catalog.sh 同步后即可查到")
+            sys.exit(1)
+
     if not ranked:
         print("NO_MATCH")
         print("Try fewer tokens, drop --status, or search category aliases (stock/futures/fund/macro/index/option/bond/fx).")
         if not args.live:
             print("catalog 里确实没有时，可能是上游新增/改名：改用 --live 直接查已安装版本，"
-                  "或跑 bash scripts/refresh.sh 同步 catalog。")
+                  "或跑 bash scripts/build_catalog.sh 同步 catalog。")
         sys.exit(1)
 
     hits = [it for _, it in ranked]

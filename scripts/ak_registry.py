@@ -31,6 +31,63 @@ from typing import Any
 
 DEFAULT_PARAM_RE = re.compile(r"^\s*(\w+)\s*=\s*(.+?)(?:[；;]|$)")
 
+# akshare 包内 data/ 下的机器可读元数据文件
+DATA_FILES = {"interfaces": "interfaces.json", "renames": "renames.json"}
+
+_RENAME_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _version_from_archive(src: Path) -> str | None:
+    """从 wheel/sdist 里读 akshare 的真实版本号（dist-info/METADATA 或 _version.py）。"""
+    try:
+        if src.suffix == ".whl":
+            with zipfile.ZipFile(src) as z:
+                for name in z.namelist():
+                    if name.endswith(".dist-info/METADATA"):
+                        for line in z.read(name).decode("utf-8", "replace").splitlines():
+                            if line.startswith("Version:"):
+                                return line.split(":", 1)[1].strip()
+                for name in z.namelist():
+                    if name.endswith("/_version.py"):
+                        m = re.search(r'__version__\s*=\s*["\']([^"\']+)',
+                                      z.read(name).decode("utf-8", "replace"))
+                        if m:
+                            return m.group(1)
+        elif src.name.endswith((".tar.gz", ".tgz")):
+            with tarfile.open(src, "r:*") as t:
+                for member in t.getmembers():
+                    if member.isfile() and member.name.endswith("/_version.py"):
+                        fh = t.extractfile(member)
+                        if fh is None:
+                            continue
+                        m = re.search(r'__version__\s*=\s*["\']([^"\']+)',
+                                      fh.read().decode("utf-8", "replace"))
+                        if m:
+                            return m.group(1)
+    except (OSError, zipfile.BadZipFile, tarfile.TarError):
+        return None
+    # 兜底：akshare-1.20.65-py3-none-any.whl / akshare-1.20.65.tar.gz
+    m = re.match(r"akshare[-_](\d+\.\d+[\w.]*?)(?:-(?:py|cp)\d|\.tar|\.zip|$)", src.name)
+    return m.group(1) if m else None
+
+
+def version_key(text: object) -> tuple[int, ...]:
+    """把 1.20.65 这类版本号拆成可比较的数字元组；解析不了的段按 0 处理。"""
+    out = []
+    for chunk in str(text or "").split("."):
+        digits = "".join(ch for ch in chunk if ch.isdigit())
+        out.append(int(digits) if digits else 0)
+    return tuple(out)
+
+
+def version_key(text: object) -> tuple[int, ...]:
+    """把 1.20.65 这类版本号拆成可比较的数字元组；解析不了的段按 0 处理。"""
+    out = []
+    for chunk in str(text or "").split("."):
+        digits = "".join(ch for ch in chunk if ch.isdigit())
+        out.append(int(digits) if digits else 0)
+    return tuple(out)
+
 
 def installed_version() -> str | None:
     """已安装 akshare 的版本号；不 import 它。"""
@@ -40,8 +97,8 @@ def installed_version() -> str | None:
         return None
 
 
-def find_registry_json() -> Path | None:
-    """已安装 akshare 包内的 data/interfaces.json；未安装或旧版（<1.20）返回 None。"""
+def find_data_file(filename: str) -> Path | None:
+    """已安装 akshare 包内的 data/<filename>；未安装或该版本没这个文件时返回 None。"""
     try:
         spec = importlib.util.find_spec("akshare")
     except (ImportError, ValueError):
@@ -49,36 +106,62 @@ def find_registry_json() -> Path | None:
     if not spec or not spec.submodule_search_locations:
         return None
     for loc in spec.submodule_search_locations:
-        cand = Path(loc) / "data" / "interfaces.json"
+        cand = Path(loc) / "data" / filename
         if cand.exists():
             return cand
     return None
 
 
-def _extract_from_archive(src: Path, workdir: Path) -> Path | None:
-    """从 wheel(.whl) 或 sdist(.tar.gz) 里取出 data/interfaces.json。"""
+def find_registry_json() -> Path | None:
+    """已安装 akshare 包内的 data/interfaces.json；未安装或旧版（<1.20）返回 None。"""
+    return find_data_file(DATA_FILES["interfaces"])
+
+
+def _extract_data_file(src: Path, workdir: Path, filename: str) -> Path | None:
+    """从 wheel(.whl) 或 sdist(.tar.gz) 里取出 data/<filename>。"""
+    marker = f"/data/{filename}"
     if src.suffix == ".whl":
         with zipfile.ZipFile(src) as z:
-            names = [n for n in z.namelist() if n.endswith("/data/interfaces.json")]
+            names = [n for n in z.namelist() if n.endswith(marker)]
             if not names:
                 return None
-            target = workdir / "interfaces.json"
+            target = workdir / filename
             with z.open(names[0]) as fsrc, open(target, "wb") as fdst:
                 shutil.copyfileobj(fsrc, fdst)
             return target
     if src.name.endswith((".tar.gz", ".tgz")):
         with tarfile.open(src, "r:*") as t:
             members = [m for m in t.getmembers()
-                       if m.isfile() and m.name.endswith("/data/interfaces.json")]
+                       if m.isfile() and m.name.endswith(marker)]
             if not members:
                 return None
             extracted = t.extractfile(members[0])
             if extracted is None:
                 return None
-            target = workdir / "interfaces.json"
+            target = workdir / filename
             target.write_bytes(extracted.read())
             return target
     return None
+
+
+def resolve_data_path(filename: str, src: Path | None = None) -> Path | None:
+    """把"任意来源"解析成 data/<filename> 的真实路径；拿不到返回 None。
+
+    来源可以是已安装的 akshare、wheel/sdist，或一个 json 文件（此时在同目录找同名/兄弟文件）。
+    """
+    if src is not None:
+        if src.is_file():
+            if src.suffix == ".json":
+                if src.name == filename:
+                    return src
+                sibling = src.parent / filename
+                return sibling if sibling.exists() else None
+            workdir = Path(tempfile.mkdtemp(prefix="akdict-data-"))
+            got = _extract_data_file(src, workdir, filename)
+            if got is not None:
+                return got
+        # 指定来源里没有这个文件时，退回已安装版本（例如旧字典仓库没有 renames.json）
+    return find_data_file(filename)
 
 
 def resolve_registry_path(src: Path | None = None) -> Path:
@@ -97,11 +180,54 @@ def resolve_registry_path(src: Path | None = None) -> Path:
         sys.exit(f"source not found: {src}")
     if src.suffix == ".json":
         return src
-    workdir = Path(tempfile.mkdtemp(prefix="akdict-reg-"))
-    got = _extract_from_archive(src, workdir)
+    got = resolve_data_path(DATA_FILES["interfaces"], src)
     if got is None:
         sys.exit(f"{src.name} 里没有 data/interfaces.json（不是 akshare>=1.20 的发行包？）")
     return got
+
+
+def load_renames(src: Path | None = None) -> dict[str, Any]:
+    """读 akshare 内置的接口改名/移除对照表 data/renames.json。
+
+    1.20.44 起随包提供，结构为 {"renamed": {旧名: [新名, 版本]}, "removed": {旧名: 版本}}。
+    拿不到（老版本 akshare、来源里没有）时返回空表，调用方按"没有改名信息"处理即可。
+    """
+    key = "" if src is None else str(Path(src).resolve())
+    cached = _RENAME_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    data: dict[str, Any] = {}
+    path = resolve_data_path(DATA_FILES["renames"], src)
+    if path is not None:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raw = None
+        if isinstance(raw, dict):
+            data = {"renamed": dict(raw.get("renamed") or {}),
+                    "removed": dict(raw.get("removed") or {})}
+    data.setdefault("renamed", {})
+    data.setdefault("removed", {})
+    _RENAME_CACHE[key] = data
+    return data
+
+
+def flatten_renames(renamed: dict[str, Any]) -> dict[str, str]:
+    """把改名表压平成 旧名 → 当前名，跟随多级改名并防止成环。"""
+    out: dict[str, str] = {}
+    for old in renamed:
+        seen = {old}
+        cur = old
+        while cur in renamed:
+            nxt = renamed[cur]
+            nxt = nxt[0] if isinstance(nxt, (list, tuple)) else str(nxt)
+            if not nxt or nxt in seen:
+                break
+            seen.add(nxt)
+            cur = nxt
+        out[old] = cur
+    return out
 
 
 def example_params(example: str, name: str) -> tuple[list, dict] | None:
@@ -208,13 +334,17 @@ def load_registry(src: Path | None = None) -> tuple[list[dict[str, Any]], dict[s
     if not isinstance(raw, list):
         sys.exit(f"{path} 不是接口表（缺 interfaces 数组）")
     version = installed_version() if src is None else None
+    if not version and src is not None and src.is_file() and src.suffix != ".json":
+        version = _version_from_archive(src)
     if not version:
         version = str(data.get("akshare_version") or data.get("version") or "") or "unknown"
+    renames = load_renames(src)
     return normalize_records(raw), {
         "akshare_version": version,
         "schema_version": data.get("schema_version"),
         "registry_path": str(path),
         "kind": "akshare-registry",
+        "renames": {"renamed": len(renames["renamed"]), "removed": len(renames["removed"])},
     }
 
 

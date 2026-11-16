@@ -1,7 +1,7 @@
 ---
 name: akshare-dictionary
 description: >-
-  Looks up AKShare financial-data APIs from a tested catalog of 1072 interfaces (stock, futures, fund, macro, option, bond, index, FX).
+  Looks up AKShare financial-data APIs from a tested catalog of 955 interfaces (stock, futures, fund, macro, option, bond, index, FX) plus 410 upstream rename mappings.
   Use when the user asks to 拉数据, 取数, akshare, AKShare, 数据接口, 数据字典, 行情, 基本面, 宏观, ETF, 期货, 期权, 债券, or needs the correct function name, parameters, or output columns.
 ---
 
@@ -9,7 +9,9 @@ description: >-
 
 禁止凭记忆编造 `ak.*` 函数名、参数或列名。先检索本 Skill 的 catalog，再写调用代码。
 
-Catalog 基于 AKShare **1.20.37**、2026-11-10 实测（1072 接口：成功 768 / 失败 193 / 超时 111）。`status` 是快照，不是实时可用性保证；上游版本、接口参数和数据源网络都可能变化。东财类接口常 `ConnectionError`，文档参数仍可试。写调用前可用 `check.sh` 对候选接口现场复测；仓库还会每 6 小时对代表性接口运行一次在线烟测。
+Catalog 基于 AKShare **1.20.65**、2026-11-16 重建（955 接口：成功 663 / 失败 138 / 超时 70 / 待重测 84）。`status` 是快照，不是实时可用性保证；上游版本、接口参数和数据源网络都可能变化。东财类接口常 `ConnectionError`，文档参数仍可试。写调用前可用 `check.sh` 对候选接口现场复测；仓库还会每 6 小时对代表性接口运行一次在线烟测。
+
+**上游改过名**：AKShare 1.20.44 / 1.20.46 一次改掉了几百个接口（如 `stock_zh_a_hist` → `stock_zh_a_hist_em`、`stock_zh_a_daily` → `stock_zh_a_hist_sina`、`index_zh_a_hist` → `index_zh_hist_em`）。catalog 的 `meta.renames` 固化了 410 条改名与 126 条移除，**用旧名查会直接指到当前名**。记忆里的名字一律以 catalog 为准。
 
 ## 工作流
 
@@ -30,14 +32,15 @@ Task Progress:
 ```bash
 bash scripts/lookup.sh 日线 A股
 bash scripts/lookup.sh --category futures 库存
-bash scripts/lookup.sh --name stock_zh_a_hist
+bash scripts/lookup.sh --name stock_zh_a_hist_em
 bash scripts/lookup.sh --status success 宏观 CPI
 # 可用性存疑（尤其东财 _em 类、快照较旧）：现场复测首选和备选
-bash scripts/check.sh stock_zh_a_hist stock_zh_a_daily
+bash scripts/check.sh stock_zh_a_hist_em stock_zh_a_hist_sina
 ```
 
 - check.sh 需要环境里有 akshare（探测时自动跳过没有的 Python）；超时默认 30s，`--timeout` 可调。
-
+- 只记得旧名时照样查：`--name <旧名>` 会提示"已更名为 X"并给出新名详情；`check.sh` 也会自动换用新名复测。
+- `check.sh` 的结论里 `MISSING` 表示本机 akshare 没有这个接口（catalog 比本机新），`FAIL` 才是真调用失败，别混看。
 - 无命中：减少词、去掉 `--status`，或换类目名（见下表）。
 - 多命中：再 `--name` 看详情。
 - 多个候选：success > timeout > error；同档选描述更贴需求的。
@@ -62,16 +65,17 @@ bash scripts/check.sh stock_zh_a_hist stock_zh_a_daily
 
 ## 高频需求（仍须 `--name` 核对参数）
 
-表中「首选/备选」的可用性备注是 2026-11-10 快照，东财类尤其会变；临用前可 `check.sh 首选 备选` 复测。
+表中「首选/备选」的可用性备注是 2026-11-16 快照，东财类尤其会变；临用前可 `check.sh 首选 备选` 复测。名字均为 **1.20.65 的当前名**。
 
 | 需求 | 首选 | 备注 |
 |---|---|---|
-| A 股日/周/月 K | `stock_zh_a_hist` | 东财常断连；更稳：`stock_zh_a_daily`（新浪，`sz000001`）或 `stock_zh_a_hist_tx` |
+| A 股日/周/月 K | `stock_zh_a_hist_em` | 东财常断连；更稳：`stock_zh_a_hist_sina`（新浪，`sz000001`）或 `stock_zh_a_hist_tx`。旧名 `stock_zh_a_hist` / `stock_zh_a_daily` 已失效 |
 | A 股分钟 | `stock_zh_a_hist_min_em` | period=`1/5/15/30/60`；1 分钟近 5 日且不复权 |
 | A 股实时 | `stock_zh_a_spot_em` | 备选 `stock_zh_a_spot_tx`（实测成功） |
 | A 股代码表 | `stock_info_a_code_name` | 无参；code 六位无前缀 |
 | 个股资料 | `stock_individual_info_em` | symbol 六位 |
-| 指数日 K | `index_zh_a_hist` | symbol 不用 `sh`/`sz` 前缀 |
+| 指数日 K | `index_zh_hist_em` | symbol 不用 `sh`/`sz` 前缀；旧名 `index_zh_a_hist` 已失效 |
+| 指数日 K（新浪/腾讯备选） | `index_zh_daily_sina` / `index_zh_daily_tx` | 旧名 `stock_zh_index_daily` / `stock_zh_index_daily_tx` 已失效 |
 | ETF 日 K | `fund_etf_hist_em` | 备选 `fund_etf_hist_sina` |
 | 期货日 K | `futures_zh_daily_sina` | 连续合约如 `RB0` |
 | 期货主力 | `futures_main_sina` / `match_main_contract` | 先查主力再拉日 K |
@@ -85,7 +89,7 @@ bash scripts/check.sh stock_zh_a_hist stock_zh_a_daily
 ```python
 import akshare as ak
 
-df = ak.stock_zh_a_hist(
+df = ak.stock_zh_a_hist_em(
     symbol="000001",
     period="daily",
     start_date="20240101",
@@ -95,10 +99,11 @@ df = ak.stock_zh_a_hist(
 ```
 
 - 用 catalog 的 `example` 和 `params_used` 当起点，按用户日期/代码改。
+- **名字**：调用前确认是当前名。catalog 里 `renamed_to` / `旧名` 标注过的接口，旧名在新版会直接 `AttributeError`。
 - **列名**：有 `columns` 用实测列；`columns_match_doc=false` 时不要用文档列名。
-- 失败接口也可按文档参数调用，并注明实测失败原因。
-- 需要最新接口列表时，用已安装的 AKShare 运行 `python scripts/build_catalog.py`（或 `--src` 指向旧字典仓库的 `akshare_dictionary.json`），再用 `python scripts/drift.py` 检查漂移，并用 `python scripts/retest.py --status untested` 复测未测或参数已变的接口。
+- 失败接口也可按文档参数调用，并注明实测失败原因（注意区分"接口不存在"和"数据源连不上"）。
+- 需要最新接口列表时，用 `scripts/build_catalog.sh --src <目标版本 .whl>` 重建，不必安装；先跑 `python scripts/drift.py --src <同上>` 看差值。
 
 ## 时效性边界
 
-本 Skill 提供的是“接口目录 + 调用前现场复测”，不能保证任一数据源持续在线、返回完整数据或满足交易级实时性。定时烟测只验证代表性接口每组至少有一个候选成功，不会把网络偶发成功写回 catalog，也不会替代调用方对返回时间戳、行数和字段的校验。任何候选失败都只作为信号记录在报告里，只有整组候选全部失败才判定失败。需要最新接口列表或参数时，应从已安装的 AKShare 重建 catalog（或先更新上游字典再 `--src` 导入），然后做漂移检查与必要的复测。
+本 Skill 提供的是“接口目录 + 改名对照 + 调用前现场复测”，不能保证任一数据源持续在线、返回完整数据或满足交易级实时性。定时烟测只验证代表性接口每组至少有一个候选成功，不会把网络偶发成功写回 catalog，也不会替代调用方对返回时间戳、行数和字段的校验。任何候选失败都只作为信号记录在报告里，只有整组候选全部失败才判定失败。需要最新接口列表或参数时，应重新生成上游字典后再构建 catalog。
