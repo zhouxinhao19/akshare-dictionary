@@ -28,8 +28,36 @@ jobs:
       - name: Install latest AKShare
         run: python -m pip install --upgrade akshare
 
+      # 上游改名是烟测假红的头号原因（1.20.44/1.20.46 一次改掉几百个接口）。
+      # 这里先做一次离线漂移检查，把"catalog 落后"和"数据源真的挂了"分开：
+      # 漂移只作提示写进 Job Summary，不让本 job 变红——catalog 同步由维护者做。
+      - name: Catalog drift check (informational)
+        continue-on-error: true
+        run: |
+          python scripts/drift.py --json > drift.json || true
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          try:
+              d = json.load(open("drift.json", encoding="utf-8"))
+          except Exception:
+              print("## Catalog drift\n\n漂移检查未产出结果（跳过）。")
+              raise SystemExit(0)
+          c = d["counts"]
+          print("## Catalog drift")
+          print(f"- catalog `{d['catalog_version']}` vs akshare `{d['registry_version']}`")
+          print(f"- renamed={c['renamed']}  removed={c['removed']}  "
+                f"added={c['added']}  params-changed={c['changed']}")
+          if d["drifted"]:
+              print("\n> catalog 已落后：跑 `bash scripts/build_catalog.sh` 同步"
+                    "（改名接口的实测状态会自动继承）")
+          elif c["renamed"]:
+              print("\n> 仅有改名，`build_catalog.sh` 可自动继承实测状态")
+          print()
+          EOF
+
       # 每组给多个候选，任一成功即视为该类数据源可用；整组失败才重试首选。
-      # 单接口耗时差异大（index_zh_a_hist 冷启动要分页拉量表），超时按接口在脚本内单独放宽。
+      # 单接口耗时差异大（index_zh_hist_em 冷启动要分页拉量表），超时按接口在脚本内单独放宽。
+      # 候选名会先按 catalog/renames 解析成当前名，旧名不会再把整组拖红。
       - name: Run live smoke test
         run: |
           set -o pipefail
@@ -45,5 +73,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: akshare-smoke-report
-          path: akshare-smoke.json
+          path: |
+            akshare-smoke.json
+            drift.json
           if-no-files-found: ignore

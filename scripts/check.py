@@ -38,6 +38,25 @@ CATALOG_MARK = {"success": "OK", "error": "ERR", "timeout": "TO", "unknown": "?"
 MAX_COLUMNS = 200  # 实测列名最多记录这么多，防止超宽表把 catalog 撑爆
 
 
+def rename_hint(name: str) -> tuple[str | None, str | None]:
+    """查这个名字是不是被上游改名/移除了；返回 (新名, 说明)。
+
+    catalog 里固化了改名对照（meta.renames），比"调用后看 AttributeError"可靠得多，
+    而且能在真正发请求之前就把改名问题指出来；catalog 没带时退回读已安装的 akshare。
+    """
+    try:
+        from lookup import catalog_removed, catalog_renames
+        new_name = catalog_renames().get(name)
+        removed = catalog_removed()
+    except Exception:
+        return None, None
+    if new_name and new_name != name:
+        return new_name, f"{name} 已更名为 {new_name}"
+    if name in removed:
+        return None, f"{name} 已在 akshare {removed[name]} 移除"
+    return None, None
+
+
 def build_call(item: dict[str, Any]) -> str:
     """按 catalog 固化的实参拼出调用串（位置参与关键字参都支持）。"""
     name = str(item.get("name"))
@@ -99,6 +118,23 @@ def check_one(item: dict[str, Any], timeout: float) -> dict[str, Any]:
     return res
 
 
+def verdict_of(r: dict[str, Any]) -> str:
+    """把复测结果归纳成一个词；重点是把"接口不存在"从"数据源挂了"里分出来。"""
+    if r.get("ok"):
+        return "OK"
+    if r.get("timeout"):
+        return "TIMEOUT"
+    if r.get("removed_reason"):
+        return "REMOVED"
+    err = str(r.get("error") or "")
+    if "has no attribute" in err:
+        # AttributeError: module 'akshare' has no attribute 'x'
+        # 说明本机 akshare 版本里压根没这个接口（通常是 catalog 比本地新），
+        # 跟"数据源连不上"是两件事，别混在一起看。
+        return "MISSING"
+    return "FAIL"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Live re-test of cataloged AKShare interfaces")
     parser.add_argument("names", nargs="+", help="接口函数名（catalog 中的 name，可一次多个）")
@@ -113,7 +149,18 @@ def main() -> None:
     for n in args.names:
         it = by_name.get(n)
         if it is None:
-            sys.exit(f"catalog 中没有接口 {n}；先用 lookup.sh --name 确认名字")
+            new_name, why = rename_hint(n)
+            if new_name:
+                it = by_name.get(new_name)
+                if it is not None:
+                    print(f"# {n} 已更名为 {new_name}，改用新名复测", file=sys.stderr)
+                else:
+                    sys.exit(f"{why}；catalog 里也还没有 {new_name}，"
+                             f"建议先跑 bash scripts/build_catalog.sh 同步")
+            elif why:
+                sys.exit(f"跳过 {n}：{why}（这是上游移除的接口，不是数据源问题）")
+            else:
+                sys.exit(f"catalog 中没有接口 {n}；先用 lookup.sh --name 确认名字")
         items.append(it)
 
     now_ver = "?"
@@ -131,6 +178,11 @@ def main() -> None:
     for it in items:
         r = check_one(it, args.timeout)
         r["catalog_status"] = it.get("status")
+        new_name, why = rename_hint(str(it.get("name")))
+        if new_name:
+            r["renamed_to"] = new_name
+        elif why and not r.get("ok"):
+            r["removed_reason"] = why
         results.append(r)
 
     if args.json:
@@ -141,10 +193,17 @@ def main() -> None:
 
     print(f"# 现场复测 akshare={now_ver}（catalog: {cat_ver} @{cat_day}；单次耗时含 akshare 导入）")
     for r in results:
-        verdict = "OK" if r["ok"] else ("TIMEOUT" if r["timeout"] else "FAIL")
+        verdict = verdict_of(r)
         mark = CATALOG_MARK.get(str(r.get("catalog_status")), str(r.get("catalog_status")))
         shape = f" rows={r['rows']} cols={r['ncols']}" if r["ok"] else ""
         err = f"  {r['error']}" if r.get("error") else ""
+        if r.get("renamed_to"):
+            err = f"  -> 新名 {r['renamed_to']}"
+        elif r.get("removed_reason"):
+            err = f"  {r['removed_reason']}"
+        elif verdict == "MISSING":
+            err = (f"  本机 akshare {now_ver} 没有这个接口（catalog 基于 {cat_ver}）："
+                   f"升级 akshare 或改用 --live 查本机版本")
         stale = "  [与快照不一致]" if r["ok"] != (r.get("catalog_status") == "success") else ""
         print(f"{r['name']:<40} 快照={mark:<3} now={verdict:<7} {r['seconds']:>6}s{shape}{err}{stale}")
 

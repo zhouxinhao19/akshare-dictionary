@@ -17,8 +17,8 @@
 
 不要默认 `000001.SZ`。按该接口 example：
 
-- 东财 `*_em` / `stock_zh_a_hist`：六位 `000001`
-- 新浪 `stock_zh_a_daily`、腾讯 `stock_zh_a_hist_tx`：带市场前缀 `sz000001` / `sh600519`
+- 东财 `*_em`（含 `stock_zh_a_hist_em` / `index_zh_hist_em`）：六位 `000001`
+- 新浪 `stock_zh_a_hist_sina`、腾讯 `stock_zh_a_hist_tx`：带市场前缀 `sz000001` / `sh600519`
 - `ts_code`：`000001.SZ`；`secid`：深市 `0.000001`，沪市 `1.600519`
 
 ## 日期
@@ -61,10 +61,21 @@
 
 ## 更新 catalog
 
-字典仓库生成新的 `output/akshare_dictionary.json` 后：
+akshare 1.20+ 自带接口表与改名表，重建不需要联网实测，也不必先安装目标版本：
 
 ```bash
-bash scripts/build_catalog.sh --src <字典仓库>/output/akshare_dictionary.json
+# 用已安装版本重建
+bash scripts/build_catalog.sh
+
+# 或直接用目标版本的发行包（不安装也能比）
+bash scripts/build_catalog.sh --src ~/Downloads/akshare-1.20.65-py3-none-any.whl
+python scripts/drift.py --src ~/Downloads/akshare-1.20.65-py3-none-any.whl   # 先看差值
 ```
 
-`--src` 必须指向字典仓库的 `akshare_dictionary.json`（原脚本里的 `~/Desktop/akshare数据字典/...` 只是本机的历史默认值，换机器后不可用）。
+实测状态按「同名接口 + 参数指纹」继承；接口被改名时按 akshare 内置 `renames.json` 追到旧名继承 `status`/`columns`，来源记在 `status_inherited_from`。升级后只需重测参数变了的少数接口：
+
+```bash
+python scripts/retest.py --status untested
+```
+
+旧版字典仓库的 `akshare_dictionary.json` 仍可用 `--src` 导入（会保留它当时实测的字段），但已不是主要路径。

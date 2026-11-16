@@ -41,7 +41,7 @@ SKILL_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from check import build_call, check_one  # noqa: E402
-from lookup import CATALOG, load_catalog  # noqa: E402
+from lookup import CATALOG, catalog_renames, load_catalog  # noqa: E402
 
 CHECKPOINT_GLOB = ".retest-*.jsonl"
 
@@ -108,10 +108,20 @@ def run_shard(names: list[str], timeout: float, delay: float, out: Path,
 def select(data: dict[str, Any], args: argparse.Namespace) -> list[str]:
     items = data.get("interfaces") or []
     if args.names:
-        wanted = set(args.names)
-        unknown = wanted - {str(i.get("name")) for i in items}
-        if unknown:
-            sys.exit(f"catalog 中没有接口: {', '.join(sorted(unknown))}")
+        by_name = {str(i.get("name")): i for i in items}
+        pairs = catalog_renames()
+        wanted: set[str] = set()
+        for n in args.names:
+            if n in by_name:
+                wanted.add(n)
+                continue
+            # 传旧名也能测：按改名表换到当前名，而不是直接报"没有这个接口"
+            new_name = pairs.get(n)
+            if new_name and new_name in by_name:
+                print(f"# {n} 已更名为 {new_name}，按新名重测", file=sys.stderr)
+                wanted.add(new_name)
+            else:
+                sys.exit(f"catalog 中没有接口: {n}（改名表里也没有它，先用 lookup.sh 确认名字）")
         pool = [str(i.get("name")) for i in items if str(i.get("name")) in wanted]
     elif args.all:
         pool = [str(i.get("name")) for i in items]
